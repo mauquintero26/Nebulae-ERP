@@ -27,6 +27,14 @@ Subcomandos:
                      tienda  el nombre guardado es el de la fila de ecommerce_products con ese id: no se toca;
                      dudosa  ninguno de los dos (el producto cambió de nombre, por ejemplo): la decide el usuario.
                    --aplicar: el producto_id de las historias aprobadas pasa de n a -n.
+    updated_at_nulos  (A6, solo --listar) cuenta las filas con updated_at vacío en customer_requests, sales_quotations y
+                   sale_orders: la pastilla de atrasados puede subir al promover (coalesce de M6).
+    vencimientos_sc  (I1) --listar: las SC cuya fecha_vencimiento guardó un INSTANTE (hora distinta de 00:00:00), con el día
+                   que muestra hoy (los 10 primeros caracteres) y el día de negocio de Colombia que tendrá; marca las
+                   protegidas (SC-20260731 y SC-20260746), que no se aplican. --aplicar --base <b> --ids <ids> --respaldo
+                   <carpeta>: pone esas SC a las 00:00 de su día de Colombia, con respaldo JSON antes (id, numero, valor
+                   anterior). Para deshacerlo: UPDATE customer_requests SET fecha_vencimiento = <valor anterior> WHERE
+                   id = <id>; por cada fila del JSON.
 
 Seguridad:
   - Al iniciar imprime la URL enmascarada y SELECT current_database(). Nunca lee ni imprime credenciales.
@@ -67,8 +75,8 @@ from scripts.datos_bloque3 import (
     _lista_de_enteros, _marcar_no_aplicado, texto_listado,
 )
 
-SUBCOMANDOS = ("catalogo_ids", "updated_at_nulos")
-SUBCOMANDOS_CON_APLICAR = ("catalogo_ids",)
+SUBCOMANDOS = ("catalogo_ids", "updated_at_nulos", "vencimientos_sc")
+SUBCOMANDOS_CON_APLICAR = ("catalogo_ids", "vencimientos_sc")
 
 # La carpeta `datos` del ledger del Bloque 4.1 (.superpowers/ está en .gitignore): ahí van la salida de los listados y los
 # respaldos de catalogo_ids --aplicar.
@@ -92,6 +100,13 @@ INFO = {
         que_haria="Solo con el OK del usuario y en cada base por separado (--aplicar --base <base> --ids <ids "
                   "aprobados>): pasa a -n el producto_id de las historias aprobadas (de clase sku o dudosa), con respaldo "
                   "JSON antes de escribir. Las de clase tienda no se tocan."),
+    "vencimientos_sc": dict(
+        titulo="Vencimientos de SC guardados como instante (I1): pasan a la medianoche de su día de Colombia",
+        que_es="El vencimiento de la SC es un DÍA DE NEGOCIO (los 10 primeros caracteres, como diaDeNegocio). Las SC viejas "
+               "guardaron un INSTANTE (utcnow + días, o el mediodía de Colombia): de noche su día en pantalla corre un día.",
+        que_haria="Solo con el OK del usuario y en cada base por separado (--aplicar --base <base> --ids <ids>): pone la "
+                  "fecha_vencimiento de esas SC a las 00:00 de su día de Colombia, con respaldo JSON antes. Las protegidas "
+                  "no se tocan."),
     "updated_at_nulos": dict(
         titulo="Filas con updated_at vacío en customer_requests, sales_quotations y sale_orders (A6)",
         que_es="El Bloque 4.1 (M6) calcula la pastilla de atrasados con COALESCE(updated_at, created_at). Las filas con "
@@ -176,12 +191,17 @@ def listar_catalogo_ids(db) -> Listado:
         historias.filas = _candidatas(db)
         historias.nota = ("sku: el nombre guardado es el del producto del SKU; tienda: es el de la fila de "
                           "ecommerce_products con ese id (no se toca); dudosa: ninguno de los dos (la decide el usuario)")
-        aprobables = [f["id"] for f in historias.filas if f["clase"] in CLASES_QUE_SE_APLICAN]
+        aprobables = [f["id"] for f in historias.filas if f["clase"] == "sku"]
+        dudosas = [f["id"] for f in historias.filas if f["clase"] == "dudosa"]
         if aprobables:
-            l.notas.append(f"Para corregir SOLO estas (con el OK del usuario): python scripts/datos_bloque4_1.py "
-                           f"catalogo_ids --aplicar --base {base_actual(db)} --ids {','.join(map(str, aprobables))}")
+            l.notas.append(f"Para corregir SOLO estas, las de clase sku (con el OK del usuario): python "
+                           f"scripts/datos_bloque4_1.py catalogo_ids --aplicar --base {base_actual(db)} --ids "
+                           f"{','.join(map(str, aprobables))}")
         else:
-            l.notas.append("No hay historias de clase sku o dudosa: catalogo_ids --aplicar no tendría nada que corregir.")
+            l.notas.append("No hay historias de clase sku: catalogo_ids --aplicar no tendría nada que corregir.")
+        if dudosas:
+            l.notas.append(f"Historias dudosas (ids {','.join(map(str, dudosas))}): NO van en el comando de arriba; las decide "
+                           f"el usuario una por una y, si aprueba alguna, se suma a --ids a mano.")
         return l
     finally:
         db.rollback()
@@ -274,6 +294,126 @@ def aplicar_catalogo_ids(db, base, ids, carpeta_respaldo=CARPETA_DATOS) -> Resul
     return res
 
 
+# ═══ vencimientos_sc ══════════════════════════════════════════════════════════════════════════════════════════════
+
+SC_PROTEGIDAS = ("SC-20260731", "SC-20260746")
+
+# El día de negocio que tendrá: el instante guardado (UTC, sin zona) visto en Colombia.
+_DIA_COLOMBIA = "((fecha_vencimiento AT TIME ZONE 'UTC') AT TIME ZONE 'America/Bogota')::date"
+
+
+def _vencimientos(db, bloquear=False) -> list:
+    """Las SC con fecha_vencimiento de hora distinta de 00:00:00 (un instante), con el día de hoy y el que tendrá, por id."""
+    bloqueo = " FOR UPDATE" if bloquear else ""
+    filas = _filas(db, f"SELECT id, numero, estado, fecha_vencimiento AS guardado, "
+                       f"left(fecha_vencimiento::text, 10) AS dia_hoy, ({_DIA_COLOMBIA})::text AS dia_nuevo "
+                       f"FROM customer_requests WHERE fecha_vencimiento IS NOT NULL "
+                       f"AND fecha_vencimiento::time <> TIME '00:00:00' ORDER BY id{bloqueo}")
+    for f in filas:
+        f["guardado"] = str(f["guardado"])
+        f["cambia"] = "sí" if f["dia_hoy"] != f["dia_nuevo"] else "no"
+        f["protegida"] = "protegida: no se aplica" if f["numero"] in SC_PROTEGIDAS else ""
+    return filas
+
+
+def listar_vencimientos_sc(db) -> Listado:
+    """El listado de vencimientos_sc. Corre SIEMPRE dentro de SET TRANSACTION READ ONLY y termina con rollback."""
+    iniciar_solo_lectura(db)
+    try:
+        l = _nuevo("vencimientos_sc")
+        filas = _vencimientos(db)
+        l.secciones.append(Seccion(
+            "vencimientos", "SC con el vencimiento guardado como instante (hora distinta de 00:00:00)",
+            [("id", "Id"), ("numero", "SC"), ("estado", "Estado"), ("guardado", "Valor guardado"),
+             ("dia_hoy", "Día que muestra hoy"), ("dia_nuevo", "Día que tendrá"), ("cambia", "Cambia de día"),
+             ("protegida", "Nota")], filas))
+        aplicables = [f for f in filas if not f["protegida"]]
+        cambian = [f for f in filas if f["cambia"] == "sí"]
+        l.notas.append(f"{len(filas)} SC con instante guardado; {len(cambian)} CAMBIAN de día; "
+                       f"{len(filas) - len(aplicables)} protegida(s) fuera de lo aplicable.")
+        if aplicables:
+            l.notas.append(f"Para normalizar (con el OK del usuario): python scripts/datos_bloque4_1.py vencimientos_sc "
+                           f"--aplicar --base {base_actual(db)} --ids {','.join(str(f['id']) for f in aplicables)} "
+                           f"--respaldo <carpeta persistente>")
+        else:
+            l.notas.append("Ninguna SC por normalizar: vencimientos_sc --aplicar no tendría nada que corregir.")
+        return l
+    finally:
+        db.rollback()
+
+
+def _escribir_respaldo_vencimientos(carpeta, base, filas, ahora) -> str:
+    contenido = {"subcomando": "vencimientos_sc", "base": base, "generado_utc": ahora.isoformat(),
+                 "como_deshacer": "Por cada fila: UPDATE customer_requests SET fecha_vencimiento = <valor_anterior> "
+                                  "WHERE id = <id>;",
+                 "columnas": ["id", "numero", "valor_anterior"],
+                 "filas": [{"id": f["id"], "numero": f["numero"], "valor_anterior": f["guardado"]} for f in filas]}
+    carpeta = Path(carpeta)
+    carpeta.mkdir(parents=True, exist_ok=True)
+    marca = ahora.strftime("%Y%m%d-%H%M%S")
+    ruta, n = carpeta / f"vencimientos_sc-{base}-{marca}.json", 1
+    while ruta.exists():
+        n += 1
+        ruta = carpeta / f"vencimientos_sc-{base}-{marca}-{n}.json"
+    ruta.write_text(json.dumps(contenido, ensure_ascii=False, indent=1), encoding="utf-8")
+    return str(ruta)
+
+
+def aplicar_vencimientos_sc(db, base, ids, carpeta_respaldo=CARPETA_DATOS) -> ResultadoAplicar:
+    """Pone a las 00:00 de su día de Colombia la fecha_vencimiento de las SC de `ids`, SOLO con el OK del usuario. Aborta
+    (ErrorDatos) SIN escribir si `base` no es current_database(), si no vienen `ids`, si un id es de una SC protegida o no
+    está en el listado, o si no se puede escribir el respaldo. Relee con FOR UPDATE, respalda antes de escribir y hace un
+    solo commit (ante un error, rollback y el respaldo pasa a '...-NO-APLICADO.json')."""
+    res = ResultadoAplicar()
+    actual = base_actual(db)
+    if base != actual:
+        db.rollback()
+        raise ErrorDatos(f"--base {base!r} no coincide con la base a la que está conectado el script ({actual!r}): no "
+                         f"se escribió nada.")
+    if not ids:
+        db.rollback()
+        raise ErrorDatos(MENSAJE_FALTA_IDS)
+    candidatas = {f["id"]: f for f in _vencimientos(db, bloquear=True)}
+    faltan = []
+    for i in ids:
+        f = candidatas.get(i)
+        if f is None:
+            faltan.append(f"id {i}: no está en el listado (su vencimiento no es un instante o no es una SC)")
+        elif f["numero"] in SC_PROTEGIDAS:
+            faltan.append(f"id {i}: {f['numero']} es un documento real protegido: no se toca")
+    if faltan:
+        db.rollback()
+        raise ErrorDatos("vencimientos_sc: no se escribió nada. " + "; ".join(faltan))
+    elegidas = [candidatas[i] for i in dict.fromkeys(ids)]
+    try:
+        ruta = _escribir_respaldo_vencimientos(carpeta_respaldo, base, elegidas, ahora_utc())
+    except OSError as exc:
+        db.rollback()
+        raise ErrorDatos(f"No se pudo escribir el respaldo en {carpeta_respaldo} ({type(exc).__name__}): no se escribió "
+                         f"nada.") from exc
+    try:
+        for f in elegidas:
+            cambio = db.execute(
+                text(f"UPDATE customer_requests SET fecha_vencimiento = ({_DIA_COLOMBIA})::timestamp "
+                     f"WHERE id = :i AND fecha_vencimiento::text = :antes"),
+                {"i": f["id"], "antes": f["guardado"]}).rowcount
+            if cambio:
+                res.cambiados += 1
+                res.detalle.append(f"{f['numero']} (id {f['id']}): {f['guardado']} → {f['dia_nuevo']} 00:00:00")
+        db.commit()
+    except Exception:
+        db.rollback()
+        _marcar_no_aplicado(ruta)
+        raise
+    if res.cambiados == 0:
+        nueva = _marcar_no_aplicado(ruta)
+        res.detalle.append("No cambió nada: el respaldo quedó como "
+                           + (os.path.basename(nueva) if nueva else "(sin renombrar)"))
+        return res
+    res.respaldo = ruta
+    return res
+
+
 # ═══ updated_at_nulos ═════════════════════════════════════════════════════════════════════════════════════════════
 
 TABLAS_UPDATED_AT = ("customer_requests", "sales_quotations", "sale_orders")
@@ -301,7 +441,9 @@ def listar_updated_at_nulos(db) -> Listado:
         db.rollback()
 
 
-LISTADORES = {"catalogo_ids": listar_catalogo_ids, "updated_at_nulos": listar_updated_at_nulos}
+LISTADORES = {"catalogo_ids": listar_catalogo_ids, "updated_at_nulos": listar_updated_at_nulos,
+              "vencimientos_sc": listar_vencimientos_sc}
+APLICADORES = {"catalogo_ids": (aplicar_catalogo_ids, "historia(s)"), "vencimientos_sc": (aplicar_vencimientos_sc, "SC")}
 
 
 # ─── CLI ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -359,15 +501,19 @@ def main(argv=None) -> int:
             print("LISTAR: no se escribió nada (transacción de solo lectura).")
             return 0
         try:
-            res = aplicar_catalogo_ids(db, base=args.base, ids=args.ids, carpeta_respaldo=args.respaldo)
+            aplicar, unidad = APLICADORES[args.subcomando]
+            res = aplicar(db, base=args.base, ids=args.ids, carpeta_respaldo=args.respaldo)
         except ErrorDatos as exc:
             print(f"ABORTADO: {exc}", file=sys.stderr)
             return 2
-        print(f"catalogo_ids: {res.cambiados} historia(s) cambiada(s).")
+        print(f"{args.subcomando}: {res.cambiados} {unidad} cambiada(s).")
         for linea in res.detalle:
             print(f"  - {linea}")
         if res.respaldo:
             print(f"Respaldo JSON: {res.respaldo}")
+            if args.subcomando == "vencimientos_sc":
+                print("Para deshacerlo: por cada fila del JSON, UPDATE customer_requests SET fecha_vencimiento = "
+                      "<valor_anterior> WHERE id = <id>;")
         return 0
     finally:
         db.close()

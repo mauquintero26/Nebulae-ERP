@@ -105,10 +105,15 @@ def test_catalogo_ids_listar_en_solo_lectura(db, brand, category, contador_sql):
     clases = {f["id"]: f["clase"] for f in historias}
     assert (clases[h.primera], clases[h.segunda]) == ("sku", "tienda"), clases
     # el comando exacto, con los ids aprobables de ESTE listado (erp_test es compartida: puede traer otras historias)
-    aprobables = [f["id"] for f in historias if f["clase"] in ("sku", "dudosa")]
-    assert h.primera in aprobables and h.segunda not in aprobables
+    dudosa = _historia(db, h.n, "Nombre que no es de ningun lado")
+    l = db41.listar_catalogo_ids(db)
+    historias = l.seccion("historias").filas
+    assert {f["id"]: f["clase"] for f in historias}[dudosa] == "dudosa"
+    aprobables = [f["id"] for f in historias if f["clase"] == "sku"]          # B4.1 final (T2 M2): SOLO las sku
+    assert h.primera in aprobables and h.segunda not in aprobables and dudosa not in aprobables
+    assert [x for x in l.notas if str(dudosa) in x and "NO van en el comando" in x], l.notas
     comando = f"catalogo_ids --aplicar --base {base} --ids {','.join(map(str, aprobables))}"
-    assert [x for x in l.notas if comando in x], (comando, l.notas)
+    assert [x for x in l.notas if x.endswith(comando)], (comando, l.notas)
     # main --listar tampoco escribe e imprime la base
     salida = io.StringIO()
     contador_sql.reset()
@@ -117,7 +122,7 @@ def test_catalogo_ids_listar_en_solo_lectura(db, brand, category, contador_sql):
     texto = salida.getvalue()
     assert _escrituras(contador_sql.sentencias) == [] and contador_sql.commits == 0
     assert f"SELECT current_database() -> {base}" in texto and "***:***@" in texto
-    assert comando in texto and "LISTAR: no se escribió nada" in texto
+    assert any(l_.strip().endswith(comando) for l_ in texto.splitlines()) and "LISTAR: no se escribió nada" in texto
     assert _producto_id(db, h.primera) == h.n
 
 
@@ -272,3 +277,112 @@ def test_updated_at_nulos_cuenta_en_solo_lectura(db, contador_sql):
         else:
             raise AssertionError("updated_at_nulos --aplicar no salió")
     assert error.getvalue()
+
+
+# ─── vencimientos_sc (B4.1 final, I1) ─────────────────────────────────────────────────────────────────────────
+
+def _sc_con_vencimiento(db, valor, numero=None):
+    from app.models.erp_documents import CustomerRequest
+    sc = CustomerRequest(numero=numero or f"SC-VEN{uuid.uuid4().hex[:8]}", customer_name="Cliente Vencimiento",
+                         estado="ASIGNADA")
+    db.add(sc)
+    db.commit()
+    db.execute(text("UPDATE customer_requests SET fecha_vencimiento = CAST(:v AS timestamp) WHERE id = :i"),
+               {"v": valor, "i": sc.id})
+    db.commit()
+    return sc
+
+
+def _vencimiento(db, sc):
+    return str(db.execute(text("SELECT fecha_vencimiento FROM customer_requests WHERE id = :i"), {"i": sc.id}).scalar())
+
+
+def test_vencimientos_sc_listar_en_solo_lectura(db, contador_sql):
+    db41 = _db41()
+    base = _base(db)
+    noche = _sc_con_vencimiento(db, "2026-11-25 03:30:00")
+    mediodia = _sc_con_vencimiento(db, "2026-11-24 17:00:00")
+    limpia = _sc_con_vencimiento(db, "2026-11-24 00:00:00")
+    protegida = _sc_con_vencimiento(db, "2026-11-25 03:30:00")
+    contador_sql.reset()
+    l = db41.listar_vencimientos_sc(db)
+    assert contador_sql.sentencias[0].strip().upper() == "SET TRANSACTION READ ONLY"
+    assert _escrituras(contador_sql.sentencias) == [] and contador_sql.commits == 0
+    assert db.execute(text("SHOW transaction_read_only")).scalar() == "off"
+    filas = {f["id"]: f for f in l.seccion("vencimientos").filas}
+    assert (filas[noche.id]["dia_hoy"], filas[noche.id]["dia_nuevo"], filas[noche.id]["cambia"]) == (
+        "2026-11-25", "2026-11-24", "sí"), filas[noche.id]
+    assert (filas[mediodia.id]["dia_hoy"], filas[mediodia.id]["dia_nuevo"], filas[mediodia.id]["cambia"]) == (
+        "2026-11-24", "2026-11-24", "no")
+    assert limpia.id not in filas                                          # a las 00:00 no se lista
+    # una protegida se marca y no entra al comando
+    original = db41.SC_PROTEGIDAS
+    db41.SC_PROTEGIDAS = original + (protegida.numero,)
+    try:
+        l = db41.listar_vencimientos_sc(db)
+    finally:
+        db41.SC_PROTEGIDAS = original
+    filas = {f["id"]: f for f in l.seccion("vencimientos").filas}
+    assert filas[protegida.id]["protegida"].startswith("protegida")
+    comando = [x for x in l.notas if "vencimientos_sc --aplicar" in x][0]
+    ids = [int(i) for i in comando.split("--ids ")[1].split(" ")[0].split(",")]
+    assert noche.id in ids and mediodia.id in ids and protegida.id not in ids and limpia.id not in ids
+    assert any("CAMBIAN de día" in x for x in l.notas)
+    salida = io.StringIO()
+    contador_sql.reset()
+    with contextlib.redirect_stdout(salida):
+        assert db41.main(["vencimientos_sc", "--listar"]) == 0
+    texto = salida.getvalue()
+    assert _escrituras(contador_sql.sentencias) == [] and contador_sql.commits == 0
+    assert f"SELECT current_database() -> {base}" in texto
+    assert "LISTAR: no se escribió nada (transacción de solo lectura)." in texto
+    assert _vencimiento(db, noche) == "2026-11-25 03:30:00"
+    error = io.StringIO()
+    with contextlib.redirect_stderr(error):
+        try:
+            db41.armar_parser().parse_args(["vencimientos_sc", "--aplicar", "--base", base])
+        except SystemExit:
+            pass
+        else:
+            raise AssertionError("vencimientos_sc --aplicar sin --ids no salió")
+    assert MENSAJE_FALTA_IDS in error.getvalue()
+
+
+def test_vencimientos_sc_aplicar_normaliza_con_respaldo(db, tmp_path):
+    db41 = _db41()
+    base = _base(db)
+    noche = _sc_con_vencimiento(db, "2026-11-25 03:30:00")
+    mediodia = _sc_con_vencimiento(db, "2026-11-24 17:00:00")
+    limpia = _sc_con_vencimiento(db, "2026-11-24 00:00:00")
+    protegida = _sc_con_vencimiento(db, "2026-11-25 03:30:00")
+    original = db41.SC_PROTEGIDAS
+    db41.SC_PROTEGIDAS = original + (protegida.numero,)
+    try:
+        # una protegida en --ids aborta sin escribir ni respaldar
+        mensaje = _error_de(db41.aplicar_vencimientos_sc, db=db, base=base, ids=[noche.id, protegida.id],
+                            carpeta_respaldo=tmp_path)
+        assert protegida.numero in mensaje and "no se toca" in mensaje
+        assert list(tmp_path.iterdir()) == [] and _vencimiento(db, noche) == "2026-11-25 03:30:00"
+        assert _vencimiento(db, protegida) == "2026-11-25 03:30:00"
+        # la que ya está a las 00:00 no está en el listado
+        assert "no está en el listado" in _error_de(db41.aplicar_vencimientos_sc, db=db, base=base, ids=[limpia.id],
+                                                   carpeta_respaldo=tmp_path)
+        assert "no coincide" in _error_de(db41.aplicar_vencimientos_sc, db=db, base="otra", ids=[noche.id],
+                                          carpeta_respaldo=tmp_path)
+        assert _error_de(db41.aplicar_vencimientos_sc, db=db, base=base, ids=[], carpeta_respaldo=tmp_path) == \
+            MENSAJE_FALTA_IDS
+        res = db41.aplicar_vencimientos_sc(db, base, [noche.id, mediodia.id], carpeta_respaldo=tmp_path)
+    finally:
+        db41.SC_PROTEGIDAS = original
+    assert res.cambiados == 2
+    assert _vencimiento(db, noche) == "2026-11-24 00:00:00"
+    assert _vencimiento(db, mediodia) == "2026-11-24 00:00:00"
+    assert _vencimiento(db, limpia) == "2026-11-24 00:00:00"
+    assert _vencimiento(db, protegida) == "2026-11-25 03:30:00"
+    respaldo = json.loads(Path(res.respaldo).read_text(encoding="utf-8"))
+    anteriores = {f["id"]: f["valor_anterior"] for f in respaldo["filas"]}
+    assert anteriores == {noche.id: "2026-11-25 03:30:00", mediodia.id: "2026-11-24 17:00:00"}
+    assert "UPDATE customer_requests SET fecha_vencimiento" in respaldo["como_deshacer"]
+    # idempotente: ya están a las 00:00
+    assert "no está en el listado" in _error_de(db41.aplicar_vencimientos_sc, db=db, base=base, ids=[noche.id],
+                                               carpeta_respaldo=tmp_path)
