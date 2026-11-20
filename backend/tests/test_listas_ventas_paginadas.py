@@ -286,6 +286,16 @@ def test_cot_se_busca_por_el_telefono_del_cliente(app_client, db, admin_token):
     assert _lista(app_client, admin_token, "COT", q=telefono, con_conteos=1)["conteos"]["activas"] == 1
 
 
+def test_cot_se_busca_por_el_telefono_comparando_digitos(app_client, db, admin_token):
+    """B4.1 final (M4): un teléfono guardado con espacios se encuentra buscando sus dígitos, con o sin guiones."""
+    f = _Fabrica(db, _ahora())
+    d = "3" + str(uuid.uuid4().int)[:9]
+    cot = f.cot("BORRADOR", customer_phone=f"{d[:3]} {d[3:6]} {d[6:]}")
+    for q in (d, f"{d[:3]}-{d[3:6]}-{d[6:]}", f"{d[:3]} {d[3:6]} {d[6:]}"):
+        assert _ids(app_client, admin_token, "COT", q=q) == [cot.id], q
+    assert _ids(app_client, admin_token, "COT", q=d[:6]) == [], d[:6]          # menos de 7 dígitos: solo la subcadena literal
+
+
 # ─── 3) Solicitudes: las filas traen cotizaciones, pedidos y chips ───────────────────────────────────────────────────
 
 def test_sc_filas_traen_cotizaciones_pedidos_y_chips(app_client, db, admin_token):

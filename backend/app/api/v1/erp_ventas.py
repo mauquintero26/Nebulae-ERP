@@ -3257,10 +3257,16 @@ def list_cotizaciones(
     if like:
         del_pedido = (select(SaleOrder.id)
                       .where(SaleOrder.cot_id == SalesQuotation.id, SaleOrder.numero.ilike(like)).exists())
+        # B4.1 final (M4): con 7 o mas digitos el telefono tambien se compara solo por sus digitos (el guardado puede traer
+        # espacios o guiones); la comparacion literal de siempre se queda como alternativa.
+        digitos = re.sub(r"\D", "", like)
+        telefono = SalesQuotation.customer_phone.ilike(like)
+        if len(digitos) >= 7:
+            telefono = telefono | func.regexp_replace(SalesQuotation.customer_phone, r"\D", "", "g").ilike(f"%{digitos}%")
         base = base.filter(
             SalesQuotation.numero.ilike(like) |
             SalesQuotation.customer_name.ilike(like) |
-            SalesQuotation.customer_phone.ilike(like) |
+            telefono |
             SalesQuotation.cotizador.ilike(like) |
             SalesQuotation.sc_numero.ilike(like) |
             productos_ilike(SalesQuotation.productos, like) |
