@@ -645,9 +645,10 @@ def test_revision_final_b4_los_tipos_de_pago_viven_en_textos_actividad():
 
 
 def test_revision_final_b6_una_sola_zona_horaria_de_colombia():
-    """B6 (revisión final): una sola constante de la zona horaria de Colombia (app/core/fechas.py). La usan
-    cambios_documento.py y erp_ventas.py (y, con un cambio de una línea, fase4 y logística): ninguno arma su propio
-    ZoneInfo("America/Bogota")."""
+    """B6 (revisión final): una sola constante de la zona horaria de Colombia (app/core/fechas.py); ninguno arma su propio
+    ZoneInfo("America/Bogota"). La importan erp_ventas.py, fase4 y logística. B4.1 (P8): cambios_documento.py ya no la usa
+    a propósito (el vencimiento de la SC es un día de negocio y no se pasa a Colombia): no debe nombrar la zona, para que no
+    vuelva a convertir ese día sin que esta prueba lo note."""
     import inspect
     import app.api.v1.erp_logistica as logistica
     import app.api.v1.erp_ventas as erp_ventas
@@ -655,7 +656,9 @@ def test_revision_final_b6_una_sola_zona_horaria_de_colombia():
     from app.core import cambios_documento, fechas
     assert fechas.ZONA_COLOMBIA.key == "America/Bogota"
     for modulo in (erp_ventas, cambios_documento, fase4, logistica):
-        fuente = inspect.getsource(modulo)
-        assert "ZoneInfo(" not in fuente, modulo.__name__
-        assert "from app.core.fechas import ZONA_COLOMBIA" in fuente, modulo.__name__
+        assert "ZoneInfo(" not in inspect.getsource(modulo), modulo.__name__
+    for modulo in (erp_ventas, fase4, logistica):
+        assert "from app.core.fechas import ZONA_COLOMBIA" in inspect.getsource(modulo), modulo.__name__
+    fuente = inspect.getsource(cambios_documento)
+    assert "ZONA_COLOMBIA" not in fuente and "America/Bogota" not in fuente, cambios_documento.__name__
     assert fase4.BOGOTA_TZ is fechas.ZONA_COLOMBIA and logistica.BOGOTA_TZ is fechas.ZONA_COLOMBIA
