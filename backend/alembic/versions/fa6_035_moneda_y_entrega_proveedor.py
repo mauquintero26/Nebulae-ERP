@@ -1,8 +1,9 @@
 """Moneda y tiempo de entrega del proveedor (Bloque 4.1, P33).
 
 Solo aditiva: dos columnas NULL en suppliers, sin valor por defecto (nadie recibe una moneda ni unos dias inventados).
-- currency: moneda en que el proveedor cotiza (codigo de 3 letras, p. ej. USD). La lee la compra para sugerirla.
-- lead_time_days: dias que tarda en entregar. La lee la compra para estimar la llegada.
+- currency: moneda en que el proveedor cotiza (codigo de 3 letras, p. ej. USD).
+- lead_time_days: dias que tarda en entregar.
+Hoy las dos columnas se guardan y se muestran en la Agenda de proveedores; la compra todavia no las lee.
 
 Revision ID: fa6_035
 Revises: fa6_034
